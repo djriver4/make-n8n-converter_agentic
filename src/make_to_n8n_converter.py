@@ -84,6 +84,7 @@ class ConversionState(TypedDict):
     # Analysis State
     analysis_results: Dict[str, Any]    # Results of Make.com structure analysis
     research_findings: Dict[str, Any]   # Platform research results
+    learned_mappings: Dict[str, str]    # Module mappings learned from research
     
     # Mapping State
     node_mappings: Dict[str, str]      # Make.com to n8n node mappings
@@ -116,6 +117,7 @@ def initialize_conversion_state(make_json: Dict[str, Any]) -> ConversionState:
         # Analysis State
         "analysis_results": {},
         "research_findings": {},
+        "learned_mappings": {},
         
         # Mapping State
         "node_mappings": {},
@@ -240,32 +242,42 @@ class MakeToN8nCrewConverter:
             return False
     
     def research_platforms(self) -> tuple[bool, Dict[str, Any]]:
-        """Research Make.com and n8n platforms for latest information"""
+        """Research Make.com and n8n platforms for latest information with enhanced mapping extraction"""
         try:
             research_results = {}
             
             # Research Make.com platform
             make_query = "Latest Make.com (formerly Integromat) workflow structure, node types, and connection patterns"
-            make_results = self.researcher.research(make_query)
-            if make_results:
+            make_success, make_results = self.researcher.research(make_query)
+            if make_success:
                 research_results["make_platform"] = make_results
             
             # Research n8n platform
             n8n_query = "Latest n8n workflow JSON structure, node types, and connection patterns"
-            n8n_results = self.researcher.research(n8n_query)
-            if n8n_results:
+            n8n_success, n8n_results = self.researcher.research(n8n_query)
+            if n8n_success:
                 research_results["n8n_platform"] = n8n_results
             
-            # Research specific conversion patterns
+            # Specific query for module mappings
+            mapping_query = "Provide a comprehensive list of Make.com modules and their equivalent n8n nodes, formatted as a mapping table"
+            mapping_success, mapping_results = self.researcher.research(mapping_query)
+            if mapping_success:
+                research_results["module_mappings"] = mapping_results
+            
+            # Research conversion patterns
             conversion_query = "Common patterns for converting between Make.com and n8n workflows"
-            conversion_results = self.researcher.research(conversion_query)
-            if conversion_results:
+            conversion_success, conversion_results = self.researcher.research(conversion_query)
+            if conversion_success:
                 research_results["conversion_patterns"] = conversion_results
             
             if research_results:
                 if self.current_state:
                     self.current_state["research_findings"] = research_results
-                    self.current_state["conversion_logs"].append("Research completed successfully")
+                    # Extract and store mappings from research
+                    discovered_mappings = self._store_research_mappings(research_results)
+                    self.current_state["conversion_logs"].append(
+                        f"Research completed successfully with {len(discovered_mappings)} module mappings discovered"
+                    )
                 return True, research_results
             return False, {}
             
@@ -498,7 +510,9 @@ class MakeToN8nCrewConverter:
             return None
 
     def _get_n8n_node_type(self, make_type):
-        """Map Make.com module types to n8n node types"""
+        """Map Make.com module types to n8n node types with improved research integration"""
+        make_type_lower = make_type.lower()
+        
         # Default mapping of common module types
         default_module_map = {
             "http": "n8n-nodes-base.httpRequest",
@@ -514,16 +528,20 @@ class MakeToN8nCrewConverter:
             "iterator": "n8n-nodes-base.splitInBatches"
         }
         
-        # Check if we have research results that might contain improved mappings
+        # Check for research-derived mappings in conversion state
+        if self.current_state and "learned_mappings" in self.current_state:
+            learned_mappings = self.current_state["learned_mappings"]
+            if make_type_lower in learned_mappings:
+                mapping = learned_mappings[make_type_lower]
+                logger.info(f"Using research-derived mapping: {make_type} -> {mapping}")
+                return mapping
+        
+        # Try to extract from research results (legacy approach for backward compatibility)
         if "platforms" in self.research_results:
-            # Try to extract module mappings from research
             try:
-                # We'll use a simple approach to find potential mappings in the research text
                 research_text = self.research_results["platforms"]
                 
-                # Look for specific mentions of this module type
                 import re
-                # Pattern to match "[Make.com module type] ... [n8n node type]"
                 mapping_pattern = re.compile(r'(?i)' + re.escape(make_type) + r'\s*(?:module|connector)?\s*(?:maps|corresponds|translates|converts)?\s*(?:to)?\s*[\'"]?(n8n-nodes-[a-zA-Z0-9.-]+)[\'"]?')
                 
                 matches = mapping_pattern.findall(research_text)
@@ -534,7 +552,80 @@ class MakeToN8nCrewConverter:
                 logger.debug(f"Error extracting module mapping from research: {str(e)}")
         
         # Fall back to default mapping or function node if not found
-        return default_module_map.get(make_type, "n8n-nodes-base.function")
+        result = default_module_map.get(make_type_lower, "n8n-nodes-base.function")
+        logger.debug(f"Using default mapping: {make_type} -> {result}")
+        return result
+
+    def _parse_module_mappings_from_research(self, research_text: str) -> Dict[str, str]:
+        """Extract Make.com to n8n module mappings from research text"""
+        discovered_mappings = {}
+        
+        try:
+            import re
+            
+            # Multiple pattern matching to increase chance of finding mappings
+            basic_mapping_pattern = re.compile(
+                r'([a-zA-Z0-9_.-]+)\s*(?:module|connector)?\s*(?:maps|corresponds|translates|converts)?\s*(?:to)?\s*[\'"]?(n8n-nodes-[a-zA-Z0-9.-]+)[\'"]?'
+            )
+            
+            table_pattern = re.compile(
+                r'(?:\|\s*)([a-zA-Z0-9_.-]+)(?:\s*\|\s*)(?:[a-zA-Z0-9_.\s-]+\|\s*)(n8n-nodes-[a-zA-Z0-9.-]+)'
+            )
+            
+            list_pattern = re.compile(
+                r'(?:[-*•]\s+)(?:"|\')?([a-zA-Z0-9_.-]+)(?:"|\')?\s*(?::|->|→|maps to|corresponds to)\s*(?:"|\')?([a-zA-Z0-9_.-]+\.n8n-nodes-[a-zA-Z0-9.-]+)(?:"|\')?'
+            )
+            
+            # Find all mappings from different patterns
+            basic_matches = basic_mapping_pattern.findall(research_text)
+            table_matches = table_pattern.findall(research_text)
+            list_matches = list_pattern.findall(research_text)
+            
+            # Process basic pattern matches
+            for make_type, n8n_type in basic_matches:
+                if make_type and n8n_type and n8n_type.startswith('n8n-nodes-'):
+                    discovered_mappings[make_type.lower()] = n8n_type
+                    logger.info(f"Discovered mapping from research (basic): {make_type} -> {n8n_type}")
+            
+            # Process table pattern matches
+            for make_type, n8n_type in table_matches:
+                if make_type and n8n_type and n8n_type.startswith('n8n-nodes-'):
+                    discovered_mappings[make_type.lower()] = n8n_type
+                    logger.info(f"Discovered mapping from research (table): {make_type} -> {n8n_type}")
+            
+            # Process list pattern matches
+            for make_type, n8n_type in list_matches:
+                if make_type and n8n_type and 'n8n-nodes-' in n8n_type:
+                    discovered_mappings[make_type.lower()] = n8n_type
+                    logger.info(f"Discovered mapping from research (list): {make_type} -> {n8n_type}")
+            
+            return discovered_mappings
+            
+        except Exception as e:
+            logger.error(f"Error parsing module mappings from research: {str(e)}", exc_info=True)
+            return {}
+    
+    def _store_research_mappings(self, research_findings: Dict[str, Any]) -> Dict[str, str]:
+        """Process research findings and store mappings in state"""
+        discovered_mappings = {}
+        
+        # Process each research section
+        for section_key, section_text in research_findings.items():
+            if isinstance(section_text, str):
+                # Parse section text for mappings
+                section_mappings = self._parse_module_mappings_from_research(section_text)
+                # Update discovered mappings
+                discovered_mappings.update(section_mappings)
+        
+        # Store the mappings in the conversion state
+        if self.current_state:
+            # Update with new mappings
+            self.current_state["learned_mappings"].update(discovered_mappings)
+            self.current_state["conversion_logs"].append(
+                f"Discovered {len(discovered_mappings)} module mappings from research"
+            )
+        
+        return discovered_mappings
 
 
 class ConverterApp:
