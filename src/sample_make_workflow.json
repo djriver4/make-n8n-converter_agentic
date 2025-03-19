@@ -1,0 +1,40 @@
+{
+  "name": "Sample Make.com Workflow",
+  "flow": [
+    {
+      "id": "1",
+      "type": "webhook",
+      "name": "Incoming Webhook",
+      "next": ["2"]
+    },
+    {
+      "id": "2",
+      "type": "http",
+      "name": "HTTP Request",
+      "next": ["3"]
+    },
+    {
+      "id": "3",
+      "type": "router",
+      "name": "Router",
+      "next": ["4", "5"]
+    },
+    {
+      "id": "4",
+      "type": "googlesheets",
+      "name": "Update Google Sheet",
+      "next": []
+    },
+    {
+      "id": "5",
+      "type": "email",
+      "name": "Send Email Notification",
+      "next": []
+    }
+  ],
+  "metadata": {
+    "version": "1.0",
+    "created": "2023-01-01T00:00:00Z",
+    "modified": "2023-01-01T00:00:00Z"
+  }
+} 
